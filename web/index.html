@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ALB Resource Cleanup Tool</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
+
+  .header {
+    background: #1a1a2e; color: #fff; padding: 16px 24px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header-actions { display: flex; gap: 8px; }
+  .header-actions button {
+    padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;
+    font-size: 13px; font-weight: 500; transition: opacity 0.2s;
+  }
+  .header-actions button:hover { opacity: 0.85; }
+  .btn-collect { background: #e94560; color: #fff; }
+  .btn-classify { background: #0f3460; color: #fff; }
+  .btn-save { background: #28a745; color: #fff; }
+  .btn-load { background: #6c757d; color: #fff; position: relative; }
+  .btn-collect:disabled, .btn-classify:disabled, .btn-save:disabled, .btn-load:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .snapshot-dropdown {
+    display: none; position: absolute; top: 100%; right: 0; z-index: 60;
+    background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    min-width: 260px; max-height: 300px; overflow-y: auto; margin-top: 4px;
+  }
+  .snapshot-dropdown.open { display: block; }
+  .snapshot-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 12px; cursor: pointer; font-size: 13px; color: #333; border-bottom: 1px solid #f0f0f0;
+  }
+  .snapshot-item:hover { background: #f0f4ff; }
+  .snapshot-item .snap-info { flex: 1; }
+  .snapshot-item .snap-name { font-weight: 600; }
+  .snapshot-item .snap-meta { font-size: 11px; color: #999; }
+  .snapshot-item .snap-delete {
+    background: none; border: none; color: #dc3545; cursor: pointer; font-size: 16px;
+    padding: 0 4px; font-weight: bold; line-height: 1;
+  }
+  .snapshot-item .snap-delete:hover { color: #a71d2a; }
+  .snapshot-empty { padding: 12px; text-align: center; color: #999; font-size: 13px; }
+
+  .filters {
+    background: #fff; padding: 12px 24px; border-bottom: 1px solid #ddd;
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  }
+  .filters label { font-size: 12px; color: #666; margin-right: 4px; }
+  .filters select, .filters input {
+    padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
+  }
+  .filters input[type="text"] { width: 200px; }
+
+  .table-wrap { padding: 16px 24px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  thead th {
+    background: #16213e; color: #fff; padding: 10px 12px; text-align: left;
+    font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; user-select: none;
+  }
+  thead th:hover { background: #1a2744; }
+  tbody td { padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: top; }
+  tbody tr:hover { background: #f0f4ff; }
+  tbody tr.dragging { opacity: 0.4; }
+  tbody tr.drag-over { border-top: 3px solid #e94560; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+  }
+  .badge-healthy { background: #d4edda; color: #155724; }
+  .badge-unhealthy { background: #fff3cd; color: #856404; }
+  .badge-no_target { background: #f8d7da; color: #721c24; }
+  .badge-no_record { background: #e2e3e5; color: #383d41; }
+  .badge-error { background: #f8d7da; color: #721c24; }
+  .badge-unknown { background: #e2e3e5; color: #6c757d; }
+
+  .action-keep { color: #155724; font-weight: 600; }
+  .action-merge { color: #0c5460; font-weight: 600; }
+  .action-delete { color: #721c24; font-weight: 600; }
+  .action-pending { color: #856404; font-weight: 600; }
+
+  .editable { cursor: pointer; border-bottom: 1px dashed #aaa; }
+  .editable:hover { background: #e8f4ff; }
+  .inline-select { padding: 4px; font-size: 13px; border: 1px solid #4a90d9; border-radius: 3px; }
+
+  .records-list { font-size: 11px; color: #555; max-width: 250px; }
+  .records-list .rec { margin: 2px 0; }
+  .rec-ok { color: #155724; }
+  .rec-ok a { color: #155724; text-decoration: underline; }
+  .rec-ok a:hover { color: #0d3d15; }
+  .rec-err { color: #dc3545; }
+  .rec-err a { color: #dc3545; text-decoration: underline; }
+  .rec-err a:hover { color: #a71d2a; }
+
+  .multi-select { position: relative; display: inline-block; }
+  .multi-select-btn {
+    padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
+    background: #fff; cursor: pointer; min-width: 140px; text-align: left;
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
+  }
+  .multi-select-btn:hover { border-color: #999; }
+  .multi-select-btn::after { content: '\25BC'; font-size: 9px; color: #999; }
+  .multi-select-dropdown {
+    display: none; position: absolute; top: 100%; left: 0; z-index: 50;
+    background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    min-width: 160px; max-height: 260px; overflow-y: auto; margin-top: 2px;
+  }
+  .multi-select-dropdown.open { display: block; }
+  .multi-select-dropdown label {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer;
+    font-size: 13px; color: #333; margin: 0;
+  }
+  .multi-select-dropdown label:hover { background: #f0f4ff; }
+  .multi-select-dropdown input[type="checkbox"] { margin: 0; }
+
+  .stats {
+    background: #fff; padding: 12px 24px; border-top: 1px solid #ddd;
+    display: flex; gap: 24px; font-size: 13px; color: #555; flex-wrap: wrap;
+  }
+  .stats .stat { display: flex; gap: 4px; }
+  .stats .stat-label { font-weight: 600; }
+
+  .toast {
+    position: fixed; top: 20px; right: 20px; padding: 12px 20px;
+    background: #333; color: #fff; border-radius: 6px;
+    font-size: 13px; z-index: 1000; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .toast.show { display: block; animation: fadeIn 0.3s; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+  .merge-panel {
+    display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: #fff; border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+    padding: 24px; min-width: 500px; max-width: 700px; max-height: 80vh; overflow-y: auto; z-index: 100;
+  }
+  .merge-panel.show { display: block; }
+  .merge-panel h3 { margin-bottom: 12px; }
+  .merge-panel .close-btn { position: absolute; top: 8px; right: 12px; cursor: pointer; font-size: 20px; color: #999; }
+  .merge-panel table { font-size: 12px; }
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 99; }
+  .overlay.show { display: block; }
+
+  .loading { text-align: center; padding: 40px; color: #999; font-size: 14px; }
+  .count-badge { font-size: 11px; color: #999; margin-left: 4px; }
+
+  .btn-final-view {
+    padding: 6px 14px; border: 2px solid #0f3460; border-radius: 4px; cursor: pointer;
+    font-size: 13px; font-weight: 600; background: #fff; color: #0f3460; transition: all 0.2s;
+  }
+  .btn-final-view:hover { background: #e8f0fe; }
+  .btn-final-view.active { background: #0f3460; color: #fff; }
+
+  .merge-info { font-size: 12px; white-space: nowrap; }
+  .merge-source { color: #0c5460; font-style: italic; }
+  .merge-target-info { color: #155724; font-weight: 600; }
+  .merge-expand-btn {
+    background: none; border: 1px solid #0c5460; border-radius: 3px; cursor: pointer;
+    font-size: 11px; color: #0c5460; padding: 1px 6px; margin-left: 4px;
+  }
+  .merge-expand-btn:hover { background: #e0f7fa; }
+  .merge-rename-btn {
+    background: none; border: none; cursor: pointer; font-size: 13px; color: #6c757d; padding: 0 4px;
+  }
+  .merge-rename-btn:hover { color: #333; }
+  .merged-name { font-size: 11px; color: #856404; margin-left: 4px; }
+
+  .merge-child-row td { background: #f0f8ff; font-size: 12px; }
+  .merge-child-row td:first-child { padding-left: 28px; }
+  .merge-unlink-btn {
+    background: none; border: 1px solid #dc3545; border-radius: 3px; cursor: pointer;
+    font-size: 11px; color: #dc3545; padding: 1px 6px;
+  }
+  .merge-unlink-btn:hover { background: #f8d7da; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>ALB Resource Cleanup Tool</h1>
+  <div class="header-actions">
+    <button class="btn-collect" onclick="doCollect()" id="btnCollect">Collect</button>
+    <button class="btn-classify" onclick="doClassify()" id="btnClassify">Classify</button>
+    <button class="btn-save" onclick="doSaveSnapshot()" id="btnSave">Save</button>
+    <div style="position:relative;display:inline-block">
+      <button class="btn-load" onclick="toggleSnapshotDropdown()" id="btnLoad">Load &#9660;</button>
+      <div class="snapshot-dropdown" id="snapshotDropdown"></div>
+    </div>
+  </div>
+</div>
+
+<div class="filters">
+  <div>
+    <label>Solution</label>
+    <div class="multi-select" id="solutionMultiSelect">
+      <div class="multi-select-btn" id="solutionBtn" onclick="toggleSolutionDropdown()">All</div>
+      <div class="multi-select-dropdown" id="solutionDropdown"></div>
+    </div>
+  </div>
+  <div>
+    <label>Status</label>
+    <select id="filterStatus" onchange="applyFilters()">
+      <option value="">All</option>
+      <option value="healthy">healthy</option>
+      <option value="unhealthy">unhealthy</option>
+      <option value="no_target">no_target</option>
+      <option value="no_record">no_record</option>
+      <option value="error">error</option>
+      <option value="unknown">unknown</option>
+    </select>
+  </div>
+  <div>
+    <label>Action</label>
+    <select id="filterAction" onchange="applyFilters()">
+      <option value="">All</option>
+      <option value="유지">유지</option>
+      <option value="합치기">합치기</option>
+      <option value="삭제">삭제</option>
+      <option value="미정">미정</option>
+    </select>
+  </div>
+  <div>
+    <label>Environment</label>
+    <select id="filterEnv" onchange="applyFilters()">
+      <option value="">All</option>
+      <option value="dev">dev</option>
+      <option value="stg">stg</option>
+      <option value="prd">prd</option>
+    </select>
+  </div>
+  <div>
+    <label>Search</label>
+    <input type="text" id="filterSearch" placeholder="ALB name..." oninput="applyFilters()">
+  </div>
+  <div style="margin-left:auto;">
+    <button class="btn-final-view" id="btnFinalView" onclick="toggleFinalView()">Final View</button>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th onclick="sortBy('index')">#</th>
+        <th onclick="sortBy('albName')">ALB Name</th>
+        <th onclick="sortBy('solution')">Solution</th>
+        <th onclick="sortBy('environment')">Env</th>
+        <th onclick="sortBy('status')">Status</th>
+        <th onclick="sortBy('action')">Action</th>
+        <th>Records</th>
+        <th>TGs</th>
+        <th>Merge Info</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody">
+      <tr><td colspan="9" class="loading">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<div class="toast" id="toast"></div>
+<div class="overlay" id="overlay" onclick="closeMergePanel()"></div>
+<div class="merge-panel" id="mergePanel">
+  <span class="close-btn" onclick="closeMergePanel()">&times;</span>
+  <div id="mergePanelContent"></div>
+</div>
+
+<script>
+const SOLUTIONS = ['signage','cms','nserise','bss','ncount','srt','aiagent','wine','ws2025','dooh','unknown'];
+const ACTIONS = ['유지','합치기','삭제','미정'];
+const ENVIRONMENTS = ['dev','stg','prd'];
+
+let allEntries = [];
+let filteredEntries = [];
+let sortField = 'albName';
+let sortAsc = true;
+let finalViewMode = false;
+let expandedMerges = new Set();
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+  populateSolutionFilter();
+  loadEntries();
+});
+
+function populateSolutionFilter() {
+  const dropdown = document.getElementById('solutionDropdown');
+  dropdown.innerHTML = '';
+  SOLUTIONS.forEach(s => {
+    const lbl = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = s;
+    cb.onchange = () => { updateSolutionBtnText(); applyFilters(); };
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(s));
+    dropdown.appendChild(lbl);
+  });
+}
+
+function toggleSolutionDropdown() {
+  const dd = document.getElementById('solutionDropdown');
+  dd.classList.toggle('open');
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  const ms = document.getElementById('solutionMultiSelect');
+  if (ms && !ms.contains(e.target)) {
+    document.getElementById('solutionDropdown').classList.remove('open');
+  }
+});
+
+function getSelectedSolutions() {
+  const checks = document.querySelectorAll('#solutionDropdown input[type="checkbox"]:checked');
+  return Array.from(checks).map(c => c.value);
+}
+
+function updateSolutionBtnText() {
+  const selected = getSelectedSolutions();
+  const btn = document.getElementById('solutionBtn');
+  if (selected.length === 0) {
+    btn.textContent = 'All';
+  } else if (selected.length <= 2) {
+    btn.textContent = selected.join(', ');
+  } else {
+    btn.textContent = selected.length + ' selected';
+  }
+}
+
+async function loadEntries() {
+  try {
+    const res = await fetch('/api/entries');
+    allEntries = await res.json();
+    if (!allEntries) allEntries = [];
+    applyFilters();
+  } catch(e) {
+    document.getElementById('tableBody').innerHTML =
+      '<tr><td colspan="9" class="loading">Failed to load data. Run "Collect" first.</td></tr>';
+  }
+}
+
+function toggleFinalView() {
+  finalViewMode = !finalViewMode;
+  const btn = document.getElementById('btnFinalView');
+  if (finalViewMode) {
+    btn.classList.add('active');
+  } else {
+    btn.classList.remove('active');
+  }
+  applyFilters();
+}
+
+function buildReverseMap() {
+  // reverseMap[targetName] = [sourceEntry1, sourceEntry2, ...]
+  const map = {};
+  allEntries.forEach(e => {
+    if (e.mergeTarget) {
+      if (!map[e.mergeTarget]) map[e.mergeTarget] = [];
+      map[e.mergeTarget].push(e);
+    }
+  });
+  return map;
+}
+
+function applyFilters() {
+  const selectedSolutions = getSelectedSolutions();
+  const status = document.getElementById('filterStatus').value;
+  const action = document.getElementById('filterAction').value;
+  const env = document.getElementById('filterEnv').value;
+  const search = document.getElementById('filterSearch').value.toLowerCase();
+
+  filteredEntries = allEntries.filter(e => {
+    if (selectedSolutions.length > 0 && !selectedSolutions.includes(e.solution)) return false;
+    if (status && e.status !== status) return false;
+    if (action && e.action !== action) return false;
+    if (env && e.environment !== env) return false;
+    if (search && !e.albName.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  if (finalViewMode) {
+    filteredEntries = filteredEntries.filter(e => {
+      if (e.action === '삭제') return false;
+      if (e.mergeTarget) return false; // source ALBs hidden
+      return true;
+    });
+  }
+
+  sortEntries();
+  renderTable();
+  renderStats();
+}
+
+function sortBy(field) {
+  if (sortField === field) {
+    sortAsc = !sortAsc;
+  } else {
+    sortField = field;
+    sortAsc = true;
+  }
+  sortEntries();
+  renderTable();
+}
+
+function sortEntries() {
+  filteredEntries.sort((a, b) => {
+    let va = sortField === 'index' ? allEntries.indexOf(a) : (a[sortField] || '');
+    let vb = sortField === 'index' ? allEntries.indexOf(b) : (b[sortField] || '');
+    if (typeof va === 'string') va = va.toLowerCase();
+    if (typeof vb === 'string') vb = vb.toLowerCase();
+    if (va < vb) return sortAsc ? -1 : 1;
+    if (va > vb) return sortAsc ? 1 : -1;
+    return 0;
+  });
+}
+
+function renderTable() {
+  const tbody = document.getElementById('tableBody');
+  if (filteredEntries.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="loading">No entries found.</td></tr>';
+    return;
+  }
+
+  const reverseMap = buildReverseMap();
+
+  let html = '';
+  filteredEntries.forEach((e, i) => {
+    const statusClass = 'badge-' + e.status;
+    const actionClass = e.action === '유지' ? 'action-keep' :
+                        e.action === '합치기' ? 'action-merge' :
+                        e.action === '삭제' ? 'action-delete' : 'action-pending';
+
+    let displayRecords = e.records || [];
+    let displayTGs = e.targetGroups || [];
+
+    // In final view, aggregate sources into target
+    if (finalViewMode && reverseMap[e.albName]) {
+      const sources = reverseMap[e.albName];
+      sources.forEach(src => {
+        displayRecords = displayRecords.concat(src.records || []);
+        displayTGs = displayTGs.concat(src.targetGroups || []);
+      });
+    }
+
+    const records = displayRecords.map(r => {
+      const cls = (r.healthCode >= 200 && r.healthCode < 500) ? 'rec-ok' : 'rec-err';
+      const code = r.healthCode === -1 ? 'cert-err' :
+                   r.healthCode === -2 ? 'dns-err' :
+                   r.healthCode === 0 ? 'timeout' : r.healthCode;
+      return '<div class="rec ' + cls + '"><a href="https://' + escAttr(r.name) + '" target="_blank">' + escHtml(r.name) + '</a> (' + code + ')</div>';
+    }).join('');
+
+    const tgs = displayTGs.map(t => {
+      return t.name + ' [H:' + t.healthyCount + ' U:' + t.unhealthyCount + ' T:' + t.targetCount + ']';
+    }).join('<br>');
+
+    // Merge Info column
+    let mergeInfo = '';
+    if (e.mergeTarget) {
+      // Source ALB
+      mergeInfo = '<span class="merge-source">&rarr; ' + escHtml(e.mergeTarget) + '</span>';
+    } else if (reverseMap[e.albName]) {
+      // Target ALB
+      const sources = reverseMap[e.albName];
+      const isExpanded = expandedMerges.has(e.albName);
+      const toggleLabel = isExpanded ? '접기' : '펼치기';
+      mergeInfo = '<span class="merge-target-info">' + sources.length + '개 합침</span>' +
+        '<button class="merge-expand-btn" onclick="toggleMergeExpand(\'' + escAttr(e.albName) + '\')">' + toggleLabel + '</button>' +
+        '<button class="merge-rename-btn" onclick="renameMergedALB(\'' + escAttr(e.albName) + '\')" title="이름변경">&#9998;</button>';
+      if (e.mergedName) {
+        mergeInfo += '<br><span class="merged-name">(새이름: ' + escHtml(e.mergedName) + ')</span>';
+      }
+    }
+
+    html += '<tr draggable="true" ondragstart="onDragStart(event,\'' + escAttr(e.albName) + '\')" ' +
+           'ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ' +
+           'ondrop="onDrop(event,\'' + escAttr(e.albName) + '\')" data-name="' + escAttr(e.albName) + '">' +
+      '<td>' + (i + 1) + '</td>' +
+      '<td><strong>' + escHtml(e.albName) + '</strong></td>' +
+      '<td class="editable" onclick="editSolution(this,\'' + escAttr(e.albName) + '\')">' + escHtml(e.solution) + '</td>' +
+      '<td class="editable" onclick="editEnvironment(this,\'' + escAttr(e.albName) + '\')">' + escHtml(e.environment) + '</td>' +
+      '<td><span class="badge ' + statusClass + '">' + escHtml(e.status) + '</span></td>' +
+      '<td class="editable ' + actionClass + '" onclick="editAction(this,\'' + escAttr(e.albName) + '\')">' + escHtml(e.action) + '</td>' +
+      '<td class="records-list">' + (records || '-') + '</td>' +
+      '<td class="records-list">' + (tgs || '-') + '</td>' +
+      '<td class="merge-info">' + mergeInfo + '</td>' +
+      '</tr>';
+
+    // Render expanded child rows
+    if (!finalViewMode && expandedMerges.has(e.albName) && reverseMap[e.albName]) {
+      reverseMap[e.albName].forEach(src => {
+        const srcRecords = (src.records || []).map(r => {
+          const cls = (r.healthCode >= 200 && r.healthCode < 500) ? 'rec-ok' : 'rec-err';
+          const code = r.healthCode === -1 ? 'cert-err' :
+                       r.healthCode === -2 ? 'dns-err' :
+                       r.healthCode === 0 ? 'timeout' : r.healthCode;
+          return '<div class="rec ' + cls + '"><a href="https://' + escAttr(r.name) + '" target="_blank">' + escHtml(r.name) + '</a> (' + code + ')</div>';
+        }).join('');
+        const srcTGs = (src.targetGroups || []).map(t => {
+          return t.name + ' [H:' + t.healthyCount + ' U:' + t.unhealthyCount + ' T:' + t.targetCount + ']';
+        }).join('<br>');
+
+        html += '<tr class="merge-child-row" data-merge-parent="' + escAttr(e.albName) + '">' +
+          '<td></td>' +
+          '<td>&hookrightarrow; ' + escHtml(src.albName) + '</td>' +
+          '<td>' + escHtml(src.solution) + '</td>' +
+          '<td>' + escHtml(src.environment) + '</td>' +
+          '<td><span class="badge badge-' + src.status + '">' + escHtml(src.status) + '</span></td>' +
+          '<td class="action-merge">' + escHtml(src.action) + '</td>' +
+          '<td class="records-list">' + (srcRecords || '-') + '</td>' +
+          '<td class="records-list">' + (srcTGs || '-') + '</td>' +
+          '<td><button class="merge-unlink-btn" onclick="unlinkMerge(\'' + escAttr(src.albName) + '\')">합치기 해제</button></td>' +
+          '</tr>';
+      });
+    }
+  });
+
+  tbody.innerHTML = html;
+}
+
+function renderStats() {
+  const stats = document.getElementById('stats');
+  const total = allEntries.length;
+  const counts = {};
+  ACTIONS.forEach(a => counts[a] = 0);
+  allEntries.forEach(e => { if (counts[e.action] !== undefined) counts[e.action]++; else counts[e.action] = 1; });
+
+  stats.innerHTML =
+    '<div class="stat"><span class="stat-label">Total:</span> ' + total + '</div>' +
+    '<div class="stat"><span class="stat-label">Showing:</span> ' + filteredEntries.length + '</div>' +
+    ACTIONS.map(a => '<div class="stat"><span class="stat-label">' + a + ':</span> ' + (counts[a]||0) + '</div>').join('');
+}
+
+// Inline editing
+function editSolution(td, name) {
+  if (td.querySelector('select')) return; // already editing
+  const current = td.textContent.trim();
+  const sel = document.createElement('select');
+  sel.className = 'inline-select';
+  SOLUTIONS.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    if (s === current) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  td.textContent = '';
+  td.appendChild(sel);
+  sel.focus();
+
+  let saved = false;
+  const save = async () => {
+    if (saved) return;
+    saved = true;
+    const val = sel.value;
+    td.textContent = val;
+    if (val !== current) {
+      await patchEntry(name, { solution: val });
+    }
+  };
+  sel.onchange = save;
+  sel.onblur = () => setTimeout(save, 150);
+}
+
+function editEnvironment(td, name) {
+  if (td.querySelector('select')) return;
+  const current = td.textContent.trim();
+  const sel = document.createElement('select');
+  sel.className = 'inline-select';
+  ENVIRONMENTS.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v; opt.textContent = v;
+    if (v === current) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  td.textContent = '';
+  td.appendChild(sel);
+  sel.focus();
+
+  let saved = false;
+  const save = async () => {
+    if (saved) return;
+    saved = true;
+    const val = sel.value;
+    td.textContent = val;
+    if (val !== current) {
+      await patchEntry(name, { environment: val });
+    }
+  };
+  sel.onchange = save;
+  sel.onblur = () => setTimeout(save, 150);
+}
+
+function editAction(td, name) {
+  if (td.querySelector('select')) return; // already editing
+  const current = td.textContent.trim();
+  const sel = document.createElement('select');
+  sel.className = 'inline-select';
+  ACTIONS.forEach(a => {
+    const opt = document.createElement('option');
+    opt.value = a; opt.textContent = a;
+    if (a === current) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  td.textContent = '';
+  td.appendChild(sel);
+  sel.focus();
+
+  let saved = false;
+  const save = async () => {
+    if (saved) return;
+    saved = true;
+    const val = sel.value;
+    td.textContent = val;
+    if (val !== current) {
+      await patchEntry(name, { action: val });
+    }
+  };
+  sel.onchange = save;
+  sel.onblur = () => setTimeout(save, 150);
+}
+
+async function patchEntry(name, updates) {
+  try {
+    const res = await fetch('/api/entries/' + encodeURIComponent(name), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      const idx = allEntries.findIndex(e => e.albName === name);
+      if (idx >= 0) allEntries[idx] = updated;
+      applyFilters();
+      showToast('Updated: ' + name);
+    } else {
+      const err = await res.json();
+      showToast('Error: ' + (err.error || 'unknown'));
+    }
+  } catch(e) {
+    showToast('Network error: ' + e.message);
+  }
+}
+
+// Merge expand/collapse and actions
+function toggleMergeExpand(targetName) {
+  if (expandedMerges.has(targetName)) {
+    expandedMerges.delete(targetName);
+  } else {
+    expandedMerges.add(targetName);
+  }
+  renderTable();
+}
+
+async function unlinkMerge(sourceName) {
+  if (!confirm(sourceName + ' 의 합치기를 해제하시겠습니까?')) return;
+  await patchEntry(sourceName, { action: '미정', mergeTarget: '' });
+}
+
+async function renameMergedALB(targetName) {
+  const entry = allEntries.find(e => e.albName === targetName);
+  const currentName = (entry && entry.mergedName) || targetName;
+  const newName = prompt('새 이름을 입력하세요', currentName);
+  if (newName === null || newName.trim() === '') return;
+  try {
+    const res = await fetch('/api/entries/' + encodeURIComponent(targetName), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mergedName: newName.trim() })
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      const idx = allEntries.findIndex(e => e.albName === targetName);
+      if (idx >= 0) allEntries[idx] = updated;
+      applyFilters();
+      showToast('이름 변경 완료: ' + newName.trim());
+    } else {
+      const err = await res.json();
+      showToast('Error: ' + (err.error || 'unknown'));
+    }
+  } catch(e) {
+    showToast('Network error: ' + e.message);
+  }
+}
+
+// Collect & Classify
+async function doCollect() {
+  const btn = document.getElementById('btnCollect');
+  btn.disabled = true; btn.textContent = 'Collecting...';
+  showToast('Starting collection...');
+  try {
+    const res = await fetch('/api/collect', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('Collection complete: ' + data.count + ' ALBs');
+      await loadEntries();
+    } else {
+      showToast('Error: ' + (data.error || 'unknown'));
+    }
+  } catch(e) {
+    showToast('Network error: ' + e.message);
+  }
+  btn.disabled = false; btn.textContent = 'Collect';
+}
+
+async function doClassify() {
+  const btn = document.getElementById('btnClassify');
+  btn.disabled = true; btn.textContent = 'Classifying...';
+  try {
+    const res = await fetch('/api/classify', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('Classified: ' + data.classified + ', Unknown: ' + data.unknown);
+      await loadEntries();
+    } else {
+      showToast('Error: ' + (data.error || 'unknown'));
+    }
+  } catch(e) {
+    showToast('Network error: ' + e.message);
+  }
+  btn.disabled = false; btn.textContent = 'Classify';
+}
+
+// Drag and Drop (P2 - merge)
+let dragSource = null;
+
+function onDragStart(e, name) {
+  dragSource = name;
+  e.dataTransfer.effectAllowed = 'move';
+  e.target.classList.add('dragging');
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const tr = e.target.closest('tr');
+  if (tr) tr.classList.add('drag-over');
+}
+
+function onDragLeave(e) {
+  const tr = e.target.closest('tr');
+  if (tr) tr.classList.remove('drag-over');
+}
+
+function onDrop(e, targetName) {
+  e.preventDefault();
+  const tr = e.target.closest('tr');
+  if (tr) tr.classList.remove('drag-over');
+
+  if (!dragSource || dragSource === targetName) return;
+  showMergePlan(dragSource, targetName);
+  dragSource = null;
+
+  // Remove dragging class from all rows
+  document.querySelectorAll('tr.dragging').forEach(r => r.classList.remove('dragging'));
+}
+
+function showMergePlan(sourceName, targetName) {
+  const source = allEntries.find(e => e.albName === sourceName);
+  const target = allEntries.find(e => e.albName === targetName);
+  if (!source || !target) return;
+
+  const content = document.getElementById('mergePanelContent');
+  content.innerHTML =
+    '<h3>Merge Plan</h3>' +
+    '<p><strong>Source (to be merged):</strong> ' + escHtml(sourceName) + '</p>' +
+    '<p><strong>Target (merge into):</strong> ' + escHtml(targetName) + '</p>' +
+    '<hr style="margin:12px 0">' +
+    '<h4>Records to move:</h4>' +
+    '<table><thead><tr><th>Record</th><th>Zone</th><th>Type</th><th>Health</th></tr></thead><tbody>' +
+    (source.records || []).map(r =>
+      '<tr><td>' + escHtml(r.name) + '</td><td>' + escHtml(r.zoneName) + '</td>' +
+      '<td>' + r.type + '</td><td>' + r.healthCode + '</td></tr>'
+    ).join('') +
+    '</tbody></table>' +
+    '<h4 style="margin-top:12px">Target Groups to move:</h4>' +
+    '<table><thead><tr><th>TG Name</th><th>Healthy</th><th>Unhealthy</th><th>Targets</th></tr></thead><tbody>' +
+    (source.targetGroups || []).map(t =>
+      '<tr><td>' + escHtml(t.name) + '</td><td>' + t.healthyCount + '</td>' +
+      '<td>' + t.unhealthyCount + '</td><td>' + t.targetCount + '</td></tr>'
+    ).join('') +
+    '</tbody></table>' +
+    '<p style="margin-top:16px;color:#e94560;font-size:12px">Note: This is a plan only. No AWS changes will be made.</p>' +
+    '<div style="margin-top:16px;text-align:right">' +
+    '<button onclick="applyMergePlan(\'' + escAttr(sourceName) + '\',\'' + escAttr(targetName) + '\')" ' +
+    'style="padding:8px 20px;background:#0f3460;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:500">' +
+    'Apply Merge Plan</button></div>';
+
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('mergePanel').classList.add('show');
+}
+
+async function applyMergePlan(sourceName, targetName) {
+  try {
+    const res = await patchEntry(sourceName, { mergeTarget: targetName, action: '합치기' });
+    closeMergePanel();
+    showToast('Merge plan applied: ' + sourceName + ' -> ' + targetName);
+    await loadEntries();
+  } catch(e) {
+    showToast('Error applying merge plan: ' + e.message);
+  }
+}
+
+function closeMergePanel() {
+  document.getElementById('overlay').classList.remove('show');
+  document.getElementById('mergePanel').classList.remove('show');
+}
+
+// Toast notification
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 3000);
+}
+
+// Utilities
+function escHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escAttr(s) {
+  if (!s) return '';
+  return s.replace(/'/g, "\\'").replace(/"/g, '\\"');
+}
+
+// Snapshot functions
+async function doSaveSnapshot() {
+  const name = prompt('Enter snapshot name:');
+  if (!name || !name.trim()) return;
+
+  const btn = document.getElementById('btnSave');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    const res = await fetch('/api/snapshots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('Snapshot saved: ' + data.name + ' (' + data.count + ' entries)');
+    } else {
+      showToast('Error: ' + (data.error || 'unknown'));
+    }
+  } catch(e) {
+    showToast('Network error: ' + e.message);
+  }
+  btn.disabled = false; btn.textContent = 'Save';
+}
+
+async function toggleSnapshotDropdown() {
+  const dd = document.getElementById('snapshotDropdown');
+  if (dd.classList.contains('open')) {
+    dd.classList.remove('open');
+    return;
+  }
+  // Fetch snapshot list
+  dd.innerHTML = '<div class="snapshot-empty">Loading...</div>';
+  dd.classList.add('open');
+
+  try {
+    const res = await fetch('/api/snapshots');
+    const snapshots = await res.json();
+    if (!snapshots || snapshots.length === 0) {
+      dd.innerHTML = '<div class="snapshot-empty">No snapshots saved</div>';
+      return;
+    }
+    dd.innerHTML = snapshots.map(s => {
+      const date = new Date(s.createdAt).toLocaleString('ko-KR');
+      return '<div class="snapshot-item">' +
+        '<div class="snap-info" onclick="doLoadSnapshot(\'' + escAttr(s.name) + '\')">' +
+        '<div class="snap-name">' + escHtml(s.name) + '</div>' +
+        '<div class="snap-meta">' + date + ' / ' + s.entryCount + ' entries</div>' +
+        '</div>' +
+        '<button class="snap-delete" onclick="event.stopPropagation();doDeleteSnapshot(\'' + escAttr(s.name) + '\')" title="Delete">&times;</button>' +
+        '</div>';
+    }).join('');
+  } catch(e) {
+    dd.innerHTML = '<div class="snapshot-empty">Failed to load snapshots</div>';
+  }
+}
+
+// Close snapshot dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('snapshotDropdown');
+  const btn = document.getElementById('btnLoad');
+  if (dd && btn && !dd.contains(e.target) && !btn.contains(e.target)) {
+    dd.classList.remove('open');
+  }
+});
+
+async function doLoadSnapshot(name) {
+  if (!confirm('Load snapshot "' + name + '"? This will overwrite current classifications.')) return;
+
+  document.getElementById('snapshotDropdown').classList.remove('open');
+  showToast('Loading snapshot...');
+  try {
+    const res = await fetch('/api/snapshots/' + encodeURIComponent(name) + '/load', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('Snapshot loaded: matched=' + data.matched + ', unmatched=' + data.unmatched);
+      await loadEntries();
+    } else {
+      showToast('Error: ' + (data.error || 'unknown'));
+    }
+  } catch(e) {
+    showToast('Network error: ' + e.message);
+  }
+}
+
+async function doDeleteSnapshot(name) {
+  if (!confirm('Delete snapshot "' + name + '"?')) return;
+
+  try {
+    const res = await fetch('/api/snapshots/' + encodeURIComponent(name), { method: 'DELETE' });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('Snapshot deleted: ' + name);
+      // Refresh the dropdown
+      toggleSnapshotDropdown();
+      setTimeout(() => toggleSnapshotDropdown(), 100);
+    } else {
+      showToast('Error: ' + (data.error || 'unknown'));
+    }
+  } catch(e) {
+    showToast('Network error: ' + e.message);
+  }
+}
+</script>
+</body>
+</html>
