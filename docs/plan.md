@@ -194,6 +194,198 @@ Phase 1 (기획)
 
 ---
 
+## Phase 9: 스냅샷 저장/불러오기 기능
+
+> 추가: 2026-04-09 -- 사용자 요청에 의한 신규 기능
+
+### 배경
+- 현재 MergeEntries로 collect 시 분류를 보존하지만, 명시적 저장/복원이 불가
+- 사용자가 수동 분류 작업을 "이름 붙여 저장"하고 나중에 "불러오기"할 수 있어야 함
+- collect/classify를 자유롭게 실행해도 이전 분류를 이름으로 복원 가능
+
+### 작업 분해
+
+| # | 작업 | 담당 | 의존 | 우선순위 | 완료 기준 |
+|---|------|------|------|----------|-----------|
+| 9.1 | `store/snapshot.go` 신규 작성 (Snapshot 타입, Save/List/Load/Delete/Apply 함수) | **Developer** | 없음 | P0 | 스냅샷 CRUD + Apply 동작 |
+| 9.2 | `server/handler.go` 핸들러 4개 추가 + `server/server.go` 라우트 추가 | **Developer** | 9.1 | P0 | API 4개 정상 동작 |
+| 9.3 | `web/index.html` 스냅샷 UI (Save/Load/Delete 버튼+드롭다운) | **Developer** | 9.2 | P0 | 웹에서 저장/불러오기/삭제 가능 |
+| 9.4 | 빌드 검증 | **Developer** | 9.3 | P0 | go build 성공, 수동 테스트 |
+
+### 구현 명세
+
+#### 파일 구조
+```
+data/
+  entries.json
+  snapshots/
+    {name}.json
+```
+
+#### 스냅샷 데이터 모델 (`store/snapshot.go`)
+```go
+type Classification struct {
+    ALBName     string `json:"albName"`
+    Solution    string `json:"solution"`
+    Environment string `json:"environment"`
+    Action      string `json:"action"`
+    MergeTarget string `json:"mergeTarget"`
+    Note        string `json:"note"`
+}
+
+type Snapshot struct {
+    Name            string           `json:"name"`
+    CreatedAt       string           `json:"createdAt"`
+    EntryCount      int              `json:"entryCount"`
+    Classifications []Classification `json:"classifications"`
+}
+
+type SnapshotMeta struct {
+    Name       string `json:"name"`
+    CreatedAt  string `json:"createdAt"`
+    EntryCount int    `json:"entryCount"`
+}
+```
+
+- 스냅샷에는 **분류 필드만** 저장 (solution, environment, action, mergeTarget, note)
+- AWS 상태 데이터(arn, dns, records, targetGroups, status)는 저장하지 않음
+
+#### 함수 목록
+- `SaveSnapshot(dataDir, entries, name)` -- 분류 필드 추출 후 `data/snapshots/{name}.json` 저장
+- `ListSnapshots(dataDir)` -- snapshots 디렉토리의 메타 목록 (최신순)
+- `LoadSnapshot(dataDir, name)` -- 파일 읽기
+- `DeleteSnapshot(dataDir, name)` -- 파일 삭제
+- `ApplySnapshot(snapshot, entries) (matched, unmatched)` -- ALB 이름 기준 매칭하여 분류 덮어쓰기
+
+#### API 설계
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/api/snapshots` | 저장. body: `{"name": "..."}` |
+| GET | `/api/snapshots` | 목록 조회 |
+| POST | `/api/snapshots/{name}/load` | 불러오기 (현재 entries에 적용) |
+| DELETE | `/api/snapshots/{name}` | 삭제 |
+
+#### 웹 UI
+- 헤더에 [Save Snapshot] 버튼, [Load Snapshot] 드롭다운 추가
+- Save: prompt로 이름 입력 -> POST /api/snapshots
+- Load: 드롭다운에서 선택 -> confirm -> POST /api/snapshots/{name}/load -> 테이블 갱신
+- Delete: 드롭다운 항목에 x 버튼 -> DELETE /api/snapshots/{name}
+
+#### 이름 검증
+- 허용: 한글, 영문, 숫자, `-`, `_`, `.`, 공백
+- 금지: `/`, `\`, `..`, `:`, `*`, `?`, `<`, `>`, `|`
+- 최대 길이: 100자
+
+#### MergeEntries와의 관계
+- MergeEntries는 **그대로 유지** (collect 시 자동 보존)
+- Snapshot은 **명시적 저장/복원** (사용자가 원할 때)
+- 역할이 다르므로 공존
+
+---
+
+## Phase 10: 합치기 뷰 및 시나리오 관리
+
+> 추가: 2026-04-09 -- 사용자 요청에 의한 신규 기능
+> 3인 논의(Planner/PM/Architect) 완료
+
+### 배경
+- 여러 사람이 합치기/삭제 시나리오를 시도해보고 결과를 확인하고 싶음
+- 합쳐진 ALB를 "최종 뷰"로 보여줘야 함 (3개->1개로 축소된 상태)
+- 합쳐진 것을 펼치거나 해제하는 기능 필요
+- 초기화/되돌리기는 Phase 9 스냅샷으로 이미 해결됨 (추가 구현 불필요)
+
+### 작업 분해
+
+| # | 작업 | 담당 | 의존 | 우선순위 | 완료 기준 |
+|---|------|------|------|----------|-----------|
+| 10.1 | `model/entry.go`에 MergedName 필드 추가 | **Developer** | 없음 | P0 | 빌드 성공 |
+| 10.2 | `store/store.go` UpdateEntry에 mergedName 지원 추가 | **Developer** | 10.1 | P0 | PATCH로 mergedName 변경 가능 |
+| 10.3 | `store/snapshot.go` Classification에 MergedName 추가 | **Developer** | 10.1 | P0 | 스냅샷에 mergedName 포함 |
+| 10.4 | `server/handler.go`에 GET /api/merge-groups 핸들러 추가 | **Developer** | 10.1 | P0 | 합치기 그룹 조회 API 동작 |
+| 10.5 | `server/server.go`에 라우트 추가 | **Developer** | 10.4 | P0 | 라우트 연결 |
+| 10.6 | `web/index.html` 최종 뷰 토글 + Merge Info 컬럼 + 접기/펼치기 + 이름 변경 + 합치기 해제 | **Developer** | 10.2, 10.4 | P0 | 웹에서 전체 기능 동작 |
+| 10.7 | 빌드 검증 | **Developer** | 10.6 | P0 | go build 성공, 수동 테스트 |
+
+### 구현 명세
+
+#### 10.1 model/entry.go
+```go
+MergedName string `json:"mergedName,omitempty"` // 합쳐진 후 표시 이름 (타겟 ALB에만 설정)
+```
+
+#### 10.2 store/store.go - UpdateEntry 확장
+```go
+if v, ok := updates["mergedName"]; ok {
+    if s, ok := v.(string); ok {
+        found.MergedName = s
+    }
+}
+```
+
+#### 10.3 store/snapshot.go - Classification 확장
+```go
+type Classification struct {
+    // ... 기존 필드 ...
+    MergedName string `json:"mergedName"`
+}
+```
+SaveSnapshot, ApplySnapshot에서도 MergedName 처리.
+
+#### 10.4 server/handler.go - HandleGetMergeGroups
+entries 순회하여 mergeTarget 기준 그룹핑. 응답:
+```json
+{
+  "target-alb": {
+    "mergedName": "new-name",
+    "sources": ["src1", "src2"],
+    "sourceRecords": [...],
+    "sourceTGs": [...]
+  }
+}
+```
+
+#### 10.5 server/server.go
+```go
+mux.HandleFunc("GET /api/merge-groups", h.HandleGetMergeGroups)
+```
+
+#### 10.6 web/index.html 변경 상세
+
+**A. 필터 영역 - "Final View" 토글 버튼 추가**
+- `let finalViewMode = false;`
+- 토글 시 applyFilters에서: 삭제/합치기(소스) 행 숨김
+- 합치기 타겟 행에는 소스들의 records/TGs 합산 표시
+
+**B. 테이블 - "Merge Info" 컬럼 추가 (TGs 다음)**
+- 소스 ALB: "-> {target}" 표시
+- 타겟 ALB: "{N}개 합침 [펼치기]" 표시 + 클릭 시 하위에 소스 행 삽입
+- mergedName 있으면: "(새이름: {mergedName})" + 변경 아이콘
+
+**C. 접기/펼치기**
+- JS에서 mergeTarget 역방향 맵 계산 (allEntries 기반)
+- 타겟 행 클릭 시 소스 행을 바로 아래에 들여쓰기로 삽입 (배경색: #f0f8ff)
+- 소스 행에 "합치기 해제" 버튼: PATCH { action: "미정", mergeTarget: "" }
+
+**D. 합쳐진 ALB 이름 변경**
+- Merge Info 영역 더블클릭 -> prompt -> PATCH { mergedName: "..." }
+
+**E. 최종 뷰 상세 로직**
+```javascript
+if (finalViewMode) {
+  // 1. 삭제 entry 제외
+  // 2. mergeTarget이 있는 entry (소스) 제외
+  // 3. 남은 entry 중 합치기 타겟은 소스들의 records/TGs를 합산하여 표시
+}
+```
+
+#### MergeEntries/스냅샷과의 관계
+- MergeEntries: 그대로 유지
+- 스냅샷: MergedName 필드 추가로 확장
+- 초기화: 스냅샷 불러오기로 해결 (별도 구현 불필요)
+- 여러 사람 시나리오: 각자 다른 이름으로 스냅샷 저장 (별도 구현 불필요)
+
+---
+
 ## 현재 진행 상황 (2026-04-09)
 
 | Phase | 상태 | 비고 |
@@ -201,6 +393,8 @@ Phase 1 (기획)
 | Phase 1 (기획) | **완료** | requirements.md 최종 확정, plan.md rev.3 반영 |
 | Phase 2 (설계) | **진행중** | 2.1 AWS 조사 완료, 2.2 아키텍처 설계 완료(rev.2), 2.3 상호 검토 진행중 (AI-01~03 Planner 미완료) |
 | Phase 3~8 | 미착수 | Phase 2.3 완료 후 진행 |
+| **Phase 9 (스냅샷)** | **완료** | store/snapshot.go, handler, UI 모두 구현됨 |
+| **Phase 10 (합치기 뷰)** | **즉시 착수 가능** | 기존 코드 위에 독립적으로 추가 가능 |
 
 ## 다음 액션
 
