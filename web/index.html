@@ -483,7 +483,7 @@ function renderTable() {
            'ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ' +
            'ondrop="onDrop(event,\'' + escAttr(e.albName) + '\')" data-name="' + escAttr(e.albName) + '">' +
       '<td>' + (i + 1) + '</td>' +
-      '<td><strong>' + escHtml(e.albName) + '</strong></td>' +
+      '<td class="alb-name-cell" onmousedown="this.parentNode.draggable=false" onmouseup="this.parentNode.draggable=true" onmouseleave="this.parentNode.draggable=true"><strong>' + escHtml(e.albName) + '</strong></td>' +
       '<td class="editable" onclick="editSolution(this,\'' + escAttr(e.albName) + '\')">' + escHtml(e.solution) + '</td>' +
       '<td class="editable" onclick="editEnvironment(this,\'' + escAttr(e.albName) + '\')">' + escHtml(e.environment) + '</td>' +
       '<td><span class="badge ' + statusClass + '">' + escHtml(e.status) + '</span></td>' +
